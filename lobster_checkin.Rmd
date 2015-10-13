@@ -1,14 +1,14 @@
 ---
 title: "Trying to Reproduce Benestan et al. Assignment Results"
-author: "Eric C. Anderson"
+author: "Eric C. Anderson and Kelly Barr"
 date: "October 8, 2015"
 output: html_document
 ---
 
 
-I found it strange that Benestan et al found that their power for assignment decreased as they added
+We found it strange that Benestan et al found that their power for assignment decreased as they added
 more markers past 3000.  This seems worrisome to me because it is a pattern characteristics of
-high grading bias.  Here I use my own program `gsi_sim` to implement the Training-Holdout-Leave-one-out
+high grading bias.  Here we use `gsi_sim` to implement the Training-Holdout-Leave-one-out
 (THL) procedure from Anderson et al. 2010 to assess power for assignment of lobsters to their sampling
 locations of origin.
 
@@ -60,7 +60,7 @@ for(SS in unique(Inds$SampSite)) {
 
 
 ## Computing some Fst's
-I am just going to compute Fst using VCF tools.  With multiple populations it computes
+We are just going to compute Fst using VCF tools.  With multiple populations it computes
 the "global" (not the
 pairwise) Fst, which might not be what Benestan et al. did. 
 It isn't entirely clear what Benestan et al. did.  They said they
@@ -344,4 +344,21 @@ The different colors denote what happens when you use different sets of individu
 ggplot(NewSumDF, aes(x = factor(NumLoci), y = Ppn_Correct, fill = Pool)) +
   geom_boxplot()
 ```
+
+So, when we assess these markers using THL with selection based on global Fst as computed by
+`vcftools` we find that there isn't that much power for identifying different sampling locations, and
+the pattern observed by Benestan et al. looks a lot like what we see with high-grading bias.
+There are a number of possibilities:
+
+1. Benestan et al. are doing locus selection in a different manner that is better than using global
+  Fst, or they have found a better way of assessing power than THL that is still robust against
+  high grading bias.  This would be very interesting and fun to follow up on.
+1. We have made a mistake in our calculations.  (Always possible, which is why Eric tries to package this
+  sort of stuff up in a reproducible package that shows explicitly what we have done, so any errors
+  can be found!)
+1. Benestan et al. have an error in their power assessment procedure that gives overly optimistic
+  results.  If so, this would suggest that easy tools for accurately assessing assignment power correctly 
+  (especially from large RAD data sets) are needed.  Perhaps we could generalize the R code used
+  here into an R-package.
+  
 
