@@ -345,19 +345,3 @@ ggplot(NewSumDF, aes(x = factor(NumLoci), y = Ppn_Correct, fill = Pool)) +
   geom_boxplot()
 ```
 
-### Quick check to see what happens if only the training individuals are used
-
-```{r}
-LocNums <- c(500, 3000) #, 2000, 3000, 4000, 5000, 6000, 7000, 10156)
-TrOnlyRes <- lapply(LocNums, function(x) thl(x, Split, train_FST, vcffile = "intermediates/train.recode.vcf")) %>%
-  bind_rows
-  
-TrOnlyDF <- TrOnlyRes %>%
-  group_by(NumLoci, From, Pool) %>%
-  summarize(NumCorrect = sum(Correct),
-            Ppn_Correct = NumCorrect / n())
-
-
-ggplot(TrOnlyDF, aes(x = factor(NumLoci), y = Ppn_Correct, fill = Pool)) +
-  geom_boxplot()
-```
