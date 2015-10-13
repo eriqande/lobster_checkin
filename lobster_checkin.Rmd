@@ -1,0 +1,363 @@
+---
+title: "Trying to Reproduce Benestan et al. Assignment Results"
+author: "Eric C. Anderson"
+date: "October 8, 2015"
+output: html_document
+---
+
+
+I found it strange that Benestan et al found that their power for assignment decreased as they added
+more markers past 3000.  This seems worrisome to me because it is a pattern characteristics of
+high grading bias.  Here I use my own program `gsi_sim` to implement the Training-Holdout-Leave-one-out
+(THL) procedure from Anderson et al. 2010 to assess power for assignment of lobsters to their sampling
+locations of origin.
+
+Note that if you want to reproduce these results you will want to be on a Mac or a Unix system.
+You will need to have `vcftools` installed and in your `$PATH` variable which is given in a
+`~/.bashrc` file.  Likewise you will need `gsi_sim`  (https://github.com/eriqande/gsi_sim commit 280734b4 or later) compiled and on your `$PATH`.
+
+## Setup
+You gotta have the following libraries:
+```{r, message=FALSE}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+```
+
+Then you have to download the file `10156-586.recode.vcf` from the paper's Dryad site and put it into
+`./data/10156-586.recode.vcf`.  
+
+Now we want to get a list of individuals.  The list on Dryad appears to have some individuals
+that don't appear in the VCF file, so we will just pull the individuals out of the VCF file and get their
+sampling locations from the individual IDs.  We put all the vcf output into a directory
+called `intermediates`.
+```{r}
+dir.create("intermediates", showWarnings = FALSE)
+system("source ~/.bashrc; vcftools --vcf data/10156-586.recode.vcf --out intermediates/get-indivs --depth")
+
+Inds <- read.table("intermediates/get-indivs.idepth", stringsAsFactors = FALSE, header = TRUE) %>%
+  tbl_df %>%
+  mutate(SampSite = str_sub(INDV, 1, 3))
+```
+Here is what `Inds` looks like:
+```{r}
+Inds
+```
+We don't need the mean read depths.  That was just a convenient way to list all the individuals in
+the file.
+
+Now, we are actually going to need some text files that list which individuals are in different
+populations.  We can do that like so:
+```{r}
+for(SS in unique(Inds$SampSite)) {
+  Inds %>% 
+    filter(SampSite == SS) %>%
+    select(INDV) %>% 
+    write.table(., file = file.path("intermediates", SS), row.names = FALSE, col.names = FALSE, quote = FALSE)
+}
+```
+
+
+## Computing some Fst's
+I am just going to compute Fst using VCF tools.  With multiple populations it computes
+the "global" (not the
+pairwise) Fst, which might not be what Benestan et al. did. 
+It isn't entirely clear what Benestan et al. did.  They said they
+computed pairwise Fst using `hierfstat` but then you have $\frac{N(N-1)}{2}$ multiple values for each
+locus (where N is the number of sampling location) so the
+ranking method they would have used isn't immediately clear.  At any rate, using global
+Fst should reasonably let you rank markers by how informative they are for some population
+comparisons, since it will be correlated with pairwise Fst.  
+```{r}
+# first  make all the --weir-fst-pop commands
+fst_comms <- paste("--weir-fst-pop", file.path("intermediates", unique(Inds$SampSite)), collapse = " ")
+
+# then compute the Fst for all the markers
+CALL <- paste("source ~/.bashrc; vcftools --vcf data/10156-586.recode.vcf --out intermediates/fst-all", fst_comms)
+system(CALL)
+
+
+# Now, read those in
+FST <- read.table("intermediates/fst-all.weir.fst", header = TRUE, stringsAsFactors = FALSE) %>%
+  tbl_df
+```
+
+Here is what they look like:
+```{r}
+FST
+```
+
+So, let's plot that and note that there are most definitely some loci that are big outliers.
+```{r fstplot, fig.width=10, fig.height=7}
+ggplot(FST, aes(x = WEIR_AND_COCKERHAM_FST)) + geom_histogram(binwidth = 0.001)
+```
+
+
+## Some functions to do THL (Training-Holdout-Leave-one-out)
+We will write a few functions to do some things we need:
+```{r}
+# a function to turn a VCF file into a gsi_sim file.
+# it will just take the name of the VCF input file and the output file
+vcf2gsi_sim <- function(VCF, outf = "gs_baseline.txt") {
+  # first output to a matrix of -1, 0, 1, and 2
+  CALL <- paste("source ~/.bashrc; vcftools --vcf", VCF, "--out intermediates/tmp-one-two --012")
+  system(CALL)
+  
+  # get the indivs
+  gsIndivs <- scan("intermediates/tmp-one-two.012.indv", what = "character")
+  N <- length(gsIndivs)
+  
+  # get the markers
+  tmp <- scan("intermediates/tmp-one-two.012.pos", what = "character")
+  # get their markers names by putting the Chromosome (always "un") and the
+  # marker numbers together prepended with an X, so each will look like "X_un_3146850"
+  gsMarkers <- paste("X", tmp[c(T,F)], tmp[c(F,T)], sep = "_")
+  M <- length(gsMarkers)
+  
+  # now make a hashie thing to change some allele names and make it all two-columny
+  alles <- c("1 1", "1 2", "2 2", "-1 -1")
+  names(alles) <- c("0", "1", "2", "-1")
+  
+  # then read them in and make a matrix of "two-column genotypes
+  genos <- alles[scan("intermediates/tmp-one-two.012", what = "character")] %>% 
+    matrix(., nrow = N, byrow = TRUE)  
+  
+  rownames(genos) <- gsIndivs
+  genos <- genos[,-1]  # note that we tear off the column that gives the index of each individual
+  
+  # now we need to sort the rows so that populations are together in case they arent already grouped
+  # together.  Just a simple order on the rownames.
+  genos <- genos[order(rownames(genos)),]
+  
+  
+  # once we have done that we should modify the row names so that the first individual of each 
+  # population has "POP NameOfPop\n" in its name, so we can print those out as they need to be
+  # for gsi_sim.  Note that this is specific to the naming format on the lobster data
+  pops <- str_sub(rownames(genos), 1, 3)
+  firsties <- c(1, 1 + which(diff(as.numeric(factor(pops))) != 0))
+  rownames(genos)[firsties] <- paste("POP ", pops[firsties], "\n", rownames(genos)[firsties], sep = "")
+  
+  
+  # then we just spooge out the preamble and the genotypes.
+  cat(nrow(genos), " ", ncol(genos), "\n", sep = "", file = outf)
+  cat(gsMarkers, sep = "\n", file = outf, append = TRUE)
+  write.table(genos, col.names = FALSE, quote = FALSE, sep = "    ", file = outf, append = TRUE)
+  
+  # return the name of the file written to:
+  return(outf)
+}
+
+# from gsi_sim --self-assign output, slurp out the population each individual
+# got assigned to, and note whether it is correct or not.
+# this relies on having pop names that are exactly three letters long.
+slurp_ass <- function(infile = "gs_out.txt") {
+  tmp <- readLines(infile)
+  tmp2 <- tmp[str_detect(tmp, "^SELF_ASSIGN_A_LA_GC_CSV")] %>%
+    str_replace_all(., "^SELF_ASSIGN_A_LA_GC_CSV:/", "")
+  str_split(tmp2, ";") %>% 
+    sapply(., "[", 1:3) %>% 
+    t %>%
+    as.data.frame(stringsAsFactors = FALSE) %>%
+    tbl_df %>%
+    setNames(c("ID", "To", "Score")) %>%
+    mutate(From = str_sub(ID, 1, 3))
+}
+```
+
+## Split the data into Training and Test sets
+We will just take (as close as possible) half of the individuals, randomly selected, to be
+Training data, and the other half to be our Test (holdout) individuals.  We will identify who
+they are and store that info in the variable `Split`
+```{r}
+set.seed(345) # for reproducibility
+# permute them within sample location and then let every other one be a Training individual 
+Split <- Inds %>%
+  group_by(SampSite) %>%
+  mutate(Pool = ifelse(sample(1:length(INDV)) %% 2 == 0, "Test", "Train")) %>%
+  ungroup
+```
+Here is what `Split` looks like:
+```{r}
+Split
+```
+
+Then we make two new VCF files:
+one of the Training individuals and one of the Test individuals.
+```{r}
+# first we make files with the names of the individuals
+Split %>% 
+  filter(Pool == "Test") %>% 
+  select(INDV) %>% 
+  unlist %>% 
+  unname  %>%
+  cat(., file = "intermediates/test-guys.txt", sep = "\n")
+
+Split %>% 
+  filter(Pool == "Train") %>% 
+  select(INDV) %>% 
+  unlist %>% 
+  unname  %>%
+  cat(., file = "intermediates/train-guys.txt", sep = "\n")
+
+# then we run vcftools to grab those out:
+system("source ~/.bashrc; vcftools --vcf data/10156-586.recode.vcf --keep intermediates/train-guys.txt --out intermediates/train --recode")
+system("source ~/.bashrc; vcftools --vcf data/10156-586.recode.vcf --keep intermediates/test-guys.txt --out intermediates/test --recode")
+```
+
+
+## Compute FST via vcftools using just the Training data
+
+
+Compute Fst's from the training set with vcftools.  The results are written to a file which
+we then read into `train_FST` which has things sorted in descending order of FST:
+```{r}
+fst_comms <- paste("--weir-fst-pop", file.path("intermediates", unique(Inds$SampSite)), collapse = " ")
+CALL <- paste("source ~/.bashrc; vcftools --vcf intermediates/train.recode.vcf --out intermediates/train-recode", fst_comms)
+system(CALL)
+
+
+# get a table of marker positions sorted by Fst high to low
+train_FST <- read.table("intermediates/train-recode.weir.fst", header = TRUE, stringsAsFactors = FALSE) %>%
+  tbl_df %>%
+  arrange(desc(WEIR_AND_COCKERHAM_FST))
+```
+Here is what `train_FST` looks like:
+```{r}
+train_FST
+```
+
+## A function to do the THL method on a given number, nL, of loci
+
+We are now almost there, but it will be convenient to have a function to which you can pass:
+
+1. The number of loci to select
+1. A data frame `Split` that tells us who is Training and who is Test
+1. A data frame like train_FST
+1. A VCF file with all the individuals and all the SNPs
+
+And it will return to you a data frame telling you whether each individual was correctly assigned to
+its sampling location or not (and also whether or not it was a Training or a Test individual.
+For this to work, the ID's of the individuals all have to start with
+a three-letter location code.
+```{r}
+thl <- function(nL, Split, train_FST, vcffile = "data/10156-586.recode.vcf") {
+  # now, choose the first nL loci, write them to a file, and get all the individuals'
+  # genotypes at those loci
+  fn <- file.path("intermediates", "tmp_top_loci")
+  train_FST[1:nL, ] %>%
+    select(CHROM, POS) %>%
+    write.table(., row.names = FALSE, col.names = FALSE, sep = "\t",
+                quote = FALSE, file = fn)
+  
+  
+  CALL <- paste("source ~/.bashrc; vcftools --vcf",
+                vcffile,
+                "--positions",
+                fn, 
+                "--recode --out",
+                fn
+  )
+  
+  system(CALL)
+  
+  
+  # make a gsi_sim file of that:
+  vcf2gsi_sim(paste(fn, "recode.vcf", sep = "."), 
+              outf = paste(fn, "gsi_sim_input", sep = "."))
+  
+  # then run gsi_sim on it
+  system(paste("source ~/.bashrc; /Users/eriq/Documents/git-repos/gsi_sim/gsisim -b", paste(fn, "gsi_sim_input", sep = "."),
+               "--self-assign > intermediates/bigdump"))
+  
+  
+  # and slurp out the assignments
+  result <- slurp_ass(file.path("intermediates", "bigdump"))
+  
+  # join back onto these whether or not they were Train or Test and add a "Correct" column
+  # and also a number of loci column.  And return that data frame.
+  result %>%
+    left_join(Split, ., by = c("INDV" = "ID")) %>%
+    mutate(Correct = (From == To),
+           NumLoci = nL)
+}
+```
+
+## Finally, let's do some experiments
+
+### Selecting loci on the basis of vcftools-calculated global FST
+
+We do the experiment with the same numbers of loci as done in the original paper.
+```{r}
+# number of SNPs
+LocNums <- c(500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 10156)
+
+# do them all...
+ResList <- lapply(LocNums, function(x) thl(x, Split, train_FST))
+
+# then make a big tidy data frame of it:
+ResDF <- bind_rows(ResList)
+
+# compute the proportion correct from each population under each scenario of
+# NumLoci and Train/Test
+SumDF <- ResDF %>%
+  group_by(NumLoci, From, Pool) %>%
+  summarize(NumCorrect = sum(Correct),
+            Ppn_Correct = NumCorrect / n())
+```
+Here is what that result data set looks like:
+```{r}
+SumDF
+```
+Note that doing THL correctly requires that one focus only on the Test individuals to calculate the proportion of
+correct assignment.  If you use only the training individuals or if you use both the training and the test individuals
+then that will give you upwardly biased predictions of the power for assignment.  It will actually be worth seeing what the
+result looks like if you use both the Training and the Test individuals to assess the proportion of correct assignments.
+We can do that like this by labeling those individuals as "Both," summarizing, then appending to SumDF.
+```{r}
+tmpDF <- ResDF
+tmpDF$Pool <- "Both"
+NewSumDF <- tmpDF %>%
+  group_by(NumLoci, From, Pool) %>%
+  summarize(NumCorrect = sum(Correct),
+            Ppn_Correct = NumCorrect / n()) %>%
+  bind_rows(SumDF, .) %>%
+  ungroup
+```
+It might be instructive to see what that data frame looks like:
+```{r}
+NewSumDF
+```
+And now we can can plot boxplots from those results. X-axis is number of loci 
+(as factor), and Y-axis is proportion of correct
+self-assignment in each sampling location.  In other words, each boxplot 
+summarizes the results over all the
+different sampling locations.
+
+The different colors denote what happens when you use different sets of individuals as the
+"Test" set, i.e. either the Holdout individuals (correct) or the Training individuals
+(incorrect and subject to high grading bias) or Both the Training and the Holdout individuals
+(also incorrect and subject to high grading bias).
+
+
+```{r boxplots, fig.width=10, fig.height=7}
+ggplot(NewSumDF, aes(x = factor(NumLoci), y = Ppn_Correct, fill = Pool)) +
+  geom_boxplot()
+```
+
+### Quick check to see what happens if only the training individuals are used
+
+```{r}
+LocNums <- c(500, 3000) #, 2000, 3000, 4000, 5000, 6000, 7000, 10156)
+TrOnlyRes <- lapply(LocNums, function(x) thl(x, Split, train_FST, vcffile = "intermediates/train.recode.vcf")) %>%
+  bind_rows
+  
+TrOnlyDF <- TrOnlyRes %>%
+  group_by(NumLoci, From, Pool) %>%
+  summarize(NumCorrect = sum(Correct),
+            Ppn_Correct = NumCorrect / n())
+
+
+ggplot(TrOnlyDF, aes(x = factor(NumLoci), y = Ppn_Correct, fill = Pool)) +
+  geom_boxplot()
+```

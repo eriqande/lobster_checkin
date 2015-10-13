@@ -1,0 +1,10 @@
+.Rproj.user
+.Rhistory
+.RData
+data/*
+*.png
+gsi_sim_seeds
+intermediates/*
+lobster_checkin_cache
+lobster_checkin.html
+lobster_checking_boxplots.pdf
