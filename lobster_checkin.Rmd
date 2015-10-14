@@ -6,15 +6,34 @@ output: html_document
 ---
 
 
-We found it strange that Benestan et al found that their power for assignment decreased as they added
-more markers past 3000.  This seems worrisome to me because it is a pattern characteristics of
-high grading bias.  Here we use `gsi_sim` to implement the Training-Holdout-Leave-one-out
-(THL) procedure from Anderson et al. 2010 to assess power for assignment of lobsters to their sampling
-locations of origin.
+We wanted to check some results that Louis Bernatchez's group had
+on Lobster population genetics in this paper: 
+[RAD genotyping reveals fine-scale genetic structuring and provides powerful population assignment in a widely distributed marine species, the American lobster (Homarus americanus)](http://onlinelibrary.wiley.com/doi/10.1111/mec.13245/abstract).
+
+We found it strange that Benestan et al found that their power for assignment _decreased_ as they added
+more markers past 3000.  This seems worrisome to us because it is a pattern characteristic of
+high grading bias.  Here we use Eric's program `gsi_sim` to implement the Training-Holdout-Leave-one-out
+(THL) procedure from 
+[Anderson 2010](http://onlinelibrary.wiley.com/doi/10.1111/j.1755-0998.2010.02846.x/full) 
+to assess power for assignment of lobsters to their sampling
+locations of origin.  And we don't find as much power for that as Benestan and
+colleagues reported.  It will be interesting to try to track down what is going on
+here.  We might have a bug, or they might have a better locus selection procedure,
+or they might have suffered some high-grading bias in the procedure they used, even
+though they intended to eliminate any such bias.
 
 Note that if you want to reproduce these results you will want to be on a Mac or a Unix system.
 You will need to have `vcftools` installed and in your `$PATH` variable which is given in a
-`~/.bashrc` file.  Likewise you will need `gsi_sim`  (https://github.com/eriqande/gsi_sim commit 280734b4 or later) compiled and on your `$PATH`.
+`~/.bashrc` file.  Likewise you will need `gsi_sim`
+([https://github.com/eriqande/gsi_sim](https://github.com/eriqande/gsi_sim) commit 280734b4 or later)
+compiled and on your `$PATH`.
+
+To reproduce this work, clone this repo, install `gsi_sim` and `vcftools` and put them on your 
+`$PATH` as listed in your `~/.bashrc`, then you have to download the file `10156-586.recode.vcf` from the
+[Benestan et al. paper's Dryad site](http://datadryad.org/resource/doi:10.5061/dryad.q771r) and put it into
+`./data/10156-586.recode.vcf` in the repository, and then open the [Rstudio](https://www.rstudio.com/)
+project and knit the file `lobster_checkin.Rmd` to HTML within Rstudio.
+
 
 ## Setup
 You gotta have the following libraries:
@@ -24,9 +43,6 @@ library(dplyr)
 library(ggplot2)
 library(stringr)
 ```
-
-Then you have to download the file `10156-586.recode.vcf` from the paper's Dryad site and put it into
-`./data/10156-586.recode.vcf`.  
 
 Now we want to get a list of individuals.  The list on Dryad appears to have some individuals
 that don't appear in the VCF file, so we will just pull the individuals out of the VCF file and get their
@@ -63,7 +79,8 @@ for(SS in unique(Inds$SampSite)) {
 We are just going to compute Fst using VCF tools.  With multiple populations it computes
 the "global" (not the
 pairwise) Fst, which might not be what Benestan et al. did. 
-It isn't entirely clear what Benestan et al. did.  They said they
+It isn't entirely clear what Benestan et al. did, as they have only submitted data to 
+Dryad and have not included any computer code documenting the analysis.  They said they
 computed pairwise Fst using `hierfstat` but then you have $\frac{N(N-1)}{2}$ multiple values for each
 locus (where N is the number of sampling location) so the
 ranking method they would have used isn't immediately clear.  At any rate, using global
