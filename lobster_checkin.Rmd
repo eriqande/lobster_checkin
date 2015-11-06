@@ -1,7 +1,7 @@
 ---
 title: "Trying to Reproduce Benestan et al. Assignment Results"
 author: "Eric C. Anderson and Kelly Barr"
-date: "October 8, 2015"
+date: "Started: October 8, 2015"
 output: html_document
 ---
 
@@ -24,7 +24,8 @@ Note that if you want to reproduce these results you will want to be on a Mac or
 You will need to have `vcftools` installed and in your `$PATH` variable which is given in a
 `~/.bashrc` file.  Likewise you will need `gsi_sim`
 ([https://github.com/eriqande/gsi_sim](https://github.com/eriqande/gsi_sim) commit 280734b4 or later)
-compiled and on your `$PATH`.
+compiled and on your `$PATH`.  (actually at this point you will need to change the absolute path
+`/Users/eriq/Documents/git-repos/gsi_sim/gsisim` to whatever it would be on your system.)
 
 To reproduce this work, clone this repo, install `gsi_sim` and `vcftools` and put them on your 
 `$PATH` as listed in your `~/.bashrc`, then you have to download the file `10156-586.recode.vcf` from the
@@ -493,56 +494,6 @@ sizes are large for North and South.
 
 
 
-We have a problem, here, it turns out, in that the Pop identifiers in the paper don't full correspond
-to what we find in the data set on Dryad.  Let's check that out.
-```{r}
-# here are the pops from the dryad file IDs:
-dryad_pops <- unique(ResDF$SampSite)
-
-# here are the pops listed in the paper in the table with
-# the North and South designations
-paper_pops <- Pop_n_reg$Pop
-
-# here are the ones that are common
-popcommon <- intersect(dryad_pops, paper_pops)
-
-# and here are the ones that aren't common to each set
-union(dryad_pops, paper_pops) %>%
-  setdiff(., popcommon)
-```
-
-OK, so here is what we will do.  It is sort of a hack, and won't be totally legit, but will
-use the computation we did previously.  We just toss out any individuals for whom the From or 
-the To columns are not in `popcommon`.  This means tossing about 900 indivs from ResDF:
-```{r}
-
-RegDF <- ResDF %>%
-  filter(To %in% popcommon, From %in% popcommon) %>%
-  left_join(., Pop_n_reg, by = c("From" = "Pop")) %>%
-  rename(FromRegion = Region) %>%
-  left_join(., Pop_n_reg, by = c("To" = "Pop")) %>%
-  rename(ToRegion = Region) %>%
-  left_join(., Pop_n_reg, by = c("From" = "Pop")) %>%
-  mutate(RegionCorrect = FromRegion == ToRegion)
-```
-Then summarize the number/ppn correct according to whether they are from South or North.
-```{r}
-SumDF_region <- RegDF %>%
-  group_by(NumLoci, FromRegion, Pool) %>%
-  summarize(RegionNumCorrect = sum(RegionCorrect),
-            RegionPpn_Correct = RegionNumCorrect / n())
-```
-Then, go ahead an plot those up...
-```{r}
-ggplot(SumDF_region, aes(x = NumLoci, y = RegionPpn_Correct, colour = Pool)) +
-  geom_line() +
-  geom_point() +
-  facet_wrap(~ FromRegion, ncol = 2)
-```
-This shows us that if we do that population assignment by population and then
-assign the individual to North or South according to which population it is 
-assigned to, then you get about 77% correct assignment of North lobsters and 
-about 94% correct assignment of South lobsters.  So, one could potentially do better when merging all the North and South populations into two big populations.  We shall investigate that now...
 
 ### Assignment to regional groups using regional groups as populations
 The way we have hacked this together, it is going to be easiest to change the original VCF file so that
@@ -698,4 +649,5 @@ The "Train" lines show the results when the training set is used as the test set
 
 ## A quick sanity check
 
-Here is a quick sanity check: permute the individuals in the data set 
+Here is a quick sanity check that could be done.: permute the individuals in the data set and randomly allocate them
+to two different groups: Fake1 and Fake2, say, of the same size as the North and South and then see how well we can allocate them.  I expect, not at all
