@@ -330,7 +330,7 @@ thl <- function(nL, Split, train_FST, vcffile = "intermediates/10156-586-IDs-cor
 ### Selecting loci on the basis of vcftools-calculated global FST
 
 We do the experiment with the same numbers of loci as done in the original paper.
-```{r}
+```{r, cache=TRUE}
 # number of SNPs
 LocNums <- c(500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 10156)
 
@@ -428,7 +428,7 @@ bogus_trainFST
 ```
 
 Now, go ahead and do the runs
-```{r like_Bene}
+```{r like_Bene, cache=TRUE}
 # do them all...
 ResList_bene <- lapply(LocNums, function(x) thl(x, Split, bogus_trainFST))
 
@@ -547,8 +547,7 @@ about 94% correct assignment of South lobsters.  So, one could potentially do be
 ### Assignment to regional groups using regional groups as populations
 The way we have hacked this together, it is going to be easiest to change the original VCF file so that
 we can still use all the same functions.  We will just prepend "South" or "North" to the ID of each
-individuals, which will give us "Populations" of "Sou" and "Nor".  Once again, we have to toss out IDs that
-don't correspond to the IDs given in the paper, but that is probably OK for now....
+individuals, which will give us "Populations" of "Sou" and "Nor".
 ```{r}
 vcf_lines <- readLines("intermediates/10156-586-IDs-corrected.vcf")
 header_idx <- which(str_detect(vcf_lines, "^#CHROM"))  # line has all the names
@@ -580,32 +579,123 @@ new_header_line <- c(header_elements[1:9], ids_df$NewID) %>%
 vcf_lines[header_idx] <- new_header_line
 
 cat(vcf_lines, file = "intermediates/north_south_renamed.vcf", sep = "\n")
-
-# and now we keep only the ones that we know are in North or South...
-system("source ~/.bashrc; vcftools --vcf intermediates/north_south_renamed.vcf --keep intermediates/north_south_names.txt --out intermediates/final_north_south --recode")
 ```
 
-OK, with that done, let's just run gsi_sim using all the markers as a first pass / check.
+OK, now `intermediates/north_south_renamed.vcf` is a file that we can just pump through the steps we
+took above for assessing high-grading bias. Let's make a variable like Inds:
 ```{r}
-vcf2gsi_sim("intermediates/final_north_south.recode.vcf", outf = "intermediates/north_south_baseline.txt")
+system("source ~/.bashrc; vcftools --vcf intermediates/north_south_renamed.vcf --out intermediates/get-indivs-reg --depth")
 
-system("source ~/.bashrc; /Users/eriq/Documents/git-repos/gsi_sim/gsisim -b intermediates/north_south_baseline.txt --self-assign > intermediates/north_south_all_out.txt")
-
-allLoci <- slurp_ass("intermediates/north_south_all_out.txt")
+IndsReg <- read.table("intermediates/get-indivs-reg.idepth", stringsAsFactors = FALSE, header = TRUE) %>%
+  tbl_df %>%
+  mutate(SampSite = str_sub(INDV, 1, 3))
 ```
+Now `SampSite` takes values of `Nor` or `Sou`.
 
-Now we can see how those came out:
+### Split these into regional training and test sets
+Same drill as before:
 ```{r}
-allLoci %>%
-  group_by(From, To) %>%
-  tally()
+set.seed(555) # for reproducibility
+# permute them within sample location and then let every other one be a Training individual 
+SplitReg <- IndsReg %>%
+  group_by(SampSite) %>%
+  mutate(Pool = ifelse(sample(1:length(INDV)) %% 2 == 0, "Test", "Train")) %>%
+  ungroup
 ```
-Which tells us that lobsters from the North get assigned correctly about 90% of the time, and lobsters from
-the South get assigned correctly about 95% of the time, using all of the loci.  
 
-So, this gives us a maximum power that we should expect.  It is unwise to think that you can
-do any better (on average) with a smaller, selected subset of loci.  So, I think this is sufficient
-to say that the Benestan et al markers can assign lobsters to North or South pretty well.  I don't find 94.5% correct assignment of both North and South lobsters, as Benestan et al. claim, but it's not far off.
+Now, make two vcf files with those different pools in them:
+```{r}
+# first we make files with the names of the individuals
+SplitReg %>% 
+  filter(Pool == "Test") %>% 
+  select(INDV) %>% 
+  unlist %>% 
+  unname  %>%
+  cat(., file = "intermediates/test-guys-reg.txt", sep = "\n")
+
+SplitReg %>% 
+  filter(Pool == "Train") %>% 
+  select(INDV) %>% 
+  unlist %>% 
+  unname  %>%
+  cat(., file = "intermediates/train-guys-reg.txt", sep = "\n")
+
+# then we run vcftools to grab those out:
+system("source ~/.bashrc; vcftools --vcf intermediates/north_south_renamed.vcf --keep intermediates/train-guys-reg.txt --out intermediates/train-reg --recode")
+system("source ~/.bashrc; vcftools --vcf intermediates/north_south_renamed.vcf --keep intermediates/test-guys-reg.txt --out intermediates/test-reg --recode")
+
+```
+
+Then compute Fst from the training data:
+```{r}
+# first make a file that names the north and south individuals 
+IndsReg %>%
+  filter(str_detect(INDV, "North")) %>% 
+  select(INDV) %>%
+  unlist %>%
+  unname %>%
+  cat(., file = "intermediates/North", sep = "\n")
+
+IndsReg %>%
+  filter(str_detect(INDV, "South")) %>% 
+  select(INDV) %>%
+  unlist %>%
+  unname %>%
+  cat(., file = "intermediates/South", sep = "\n")
 
 
-when both north 
+# then put together the commands to compute the Fst's using the training individuals
+fst_comms <- paste("--weir-fst-pop", file.path("intermediates", c("North", "South")), collapse = " ")
+CALL <- paste("source ~/.bashrc; vcftools --vcf intermediates/train-reg.recode.vcf --out intermediates/train-recode-reg", fst_comms)
+system(CALL)
+
+```
+
+Let's have a look at the Fst between regions computed from the training data:
+```{r}
+trainFST_reg <- read.table("intermediates/train-recode-reg.weir.fst", 
+                           stringsAsFactors = FALSE, 
+                           header = TRUE) %>%
+  tbl_df
+
+ggplot(trainFST_reg, aes(x = WEIR_AND_COCKERHAM_FST)) +
+  geom_histogram(binwidth = 0.001)
+```
+
+Hmm...the Fst between these two groups that got computed there seems lower than what is reported in the paper.
+
+At any rate, we are now ready to run this.  
+```{r, cache=TRUE}
+# number of SNPs
+LocNums <- c(500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 10156)
+
+# do them all...
+ResListReg <- lapply(LocNums, function(x) thl(nL = x, 
+                                              Split = SplitReg, 
+                                              train_FST = trainFST_reg, 
+                                              vcffile = "intermediates/north_south_renamed.vcf"))
+
+ResDF_reg <- bind_rows(ResListReg)
+
+# compute the proportion correct from each population under each scenario of
+# NumLoci and Train/Test
+SumDF_reg <- ResDF_reg %>%
+  group_by(NumLoci, From, Pool) %>%
+  summarize(NumCorrect = sum(Correct),
+            Ppn_Correct = NumCorrect / n())
+```
+
+So, now we can plot those as lines, faceted on North and South:
+```{r}
+ggplot(SumDF_reg, aes(x = NumLoci, y = Ppn_Correct, colour = Pool)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~ From, nrow = 1)
+```
+
+The "Train" lines show the results when the training set is used as the test set (and thus would be subject to high grading bias).  This indicates that with the larger sample sizes there is not a strong high grading bias effect (as stated in Anderson 2010, the effect will be larger with small samples.)  And, it shows that using all the loci one can apparently allocate individuals to region with with accuracy > 90%.  
+
+
+## A quick sanity check
+
+Here is a quick sanity check: permute the individuals in the data set 
