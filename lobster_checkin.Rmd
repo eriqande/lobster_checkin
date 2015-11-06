@@ -6,20 +6,18 @@ output: html_document
 ---
 
 
-We wanted to check some results that Louis Bernatchez's group had
+Here check some results that Louis Bernatchez's group had
 on Lobster population genetics in this paper: 
 [RAD genotyping reveals fine-scale genetic structuring and provides powerful population assignment in a widely distributed marine species, the American lobster (Homarus americanus)](http://onlinelibrary.wiley.com/doi/10.1111/mec.13245/abstract).
 
-We found it strange that Benestan et al found that their power for assignment _decreased_ as they added
+We found it strange that Benestan et al found that their power for assignment _decreased_ dramatically as they added
 more markers past 3000.  This seems worrisome to us because it is a pattern characteristic of
 high grading bias.  Here we use Eric's program `gsi_sim` to implement the Training-Holdout-Leave-one-out
 (THL) procedure from 
 [Anderson 2010](http://onlinelibrary.wiley.com/doi/10.1111/j.1755-0998.2010.02846.x/full) 
 to assess power for assignment of lobsters to their sampling
 locations of origin.  And we don't find as much power for that as Benestan and
-colleagues reported.  It will be interesting to try to track down what is going on
-here.  We might have a bug, or they might have a better locus selection procedure,
-or they might have suffered some high-grading bias in the procedure they used, even
+colleagues reported.  We conclude they suffered some high-grading bias in the procedure they used, even
 though they intended to eliminate any such bias.
 
 Note that if you want to reproduce these results you will want to be on a Mac or a Unix system.
@@ -44,13 +42,40 @@ library(ggplot2)
 library(stringr)
 ```
 
-Now we want to get a list of individuals.  The list on Dryad appears to have some individuals
-that don't appear in the VCF file, so we will just pull the individuals out of the VCF file and get their
-sampling locations from the individual IDs.  We put all the vcf output into a directory
-called `intermediates`.
+### Dealing with the individual IDs
+
+First thing we need to do is correct some errors in the data set.  There are sampling locations codes in the
+data set on Dryad that do not appear in the paper, and there are location codes in the paper that do not
+appear in the data set!  A coauthor of the paper indicated that this could all be fixed by:
+
+- Sampling sites EDN and CAP get renamed to MAG
+- Sampling site SID gets renamed to DIN.
+
+So, we are going to just do that and write out a corrected VCF file.  We put all the vcf output into a
+directory called `intermediates`.
 ```{r}
 dir.create("intermediates", showWarnings = FALSE)
-system("source ~/.bashrc; vcftools --vcf data/10156-586.recode.vcf --out intermediates/get-indivs --depth")
+
+# get the VCF file headers (indiv IDs, etc)
+vcf_lines <- readLines("data/10156-586.recode.vcf")
+header_idx <- which(str_detect(vcf_lines, "^#CHROM"))  # line has all the names
+header_elements <- vcf_lines[header_idx] %>%
+  str_split(., "\t") %>%
+  "[["(.,1)
+
+# now, rename the individuals as appropriate
+ids <- header_elements[-(1:9)] %>%
+  str_replace_all("EDN_", "MAG_a") %>%  # Note we append the a and b on the ID to keep them unique
+  str_replace_all("CAP_", "MAG_b") %>%
+  str_replace_all("SID_", "DIN_")
+
+# and put that new header back into there and print it out
+vcf_lines[header_idx] <- paste(c(header_elements[1:9], ids), collapse = "\t")
+
+cat(vcf_lines, file = "intermediates/10156-586-IDs-corrected.vcf", sep = "\n")
+
+# then get a list of the individuals that are in there:
+system("source ~/.bashrc; vcftools --vcf intermediates/10156-586-IDs-corrected.vcf --out intermediates/get-indivs --depth")
 
 Inds <- read.table("intermediates/get-indivs.idepth", stringsAsFactors = FALSE, header = TRUE) %>%
   tbl_df %>%
@@ -91,7 +116,7 @@ comparisons, since it will be correlated with pairwise Fst.
 fst_comms <- paste("--weir-fst-pop", file.path("intermediates", unique(Inds$SampSite)), collapse = " ")
 
 # then compute the Fst for all the markers
-CALL <- paste("source ~/.bashrc; vcftools --vcf data/10156-586.recode.vcf --out intermediates/fst-all", fst_comms)
+CALL <- paste("source ~/.bashrc; vcftools --vcf intermediates/10156-586-IDs-corrected.vcf --out intermediates/fst-all", fst_comms)
 system(CALL)
 
 
@@ -218,8 +243,8 @@ Split %>%
   cat(., file = "intermediates/train-guys.txt", sep = "\n")
 
 # then we run vcftools to grab those out:
-system("source ~/.bashrc; vcftools --vcf data/10156-586.recode.vcf --keep intermediates/train-guys.txt --out intermediates/train --recode")
-system("source ~/.bashrc; vcftools --vcf data/10156-586.recode.vcf --keep intermediates/test-guys.txt --out intermediates/test --recode")
+system("source ~/.bashrc; vcftools --vcf intermediates/10156-586-IDs-corrected.vcf --keep intermediates/train-guys.txt --out intermediates/train --recode")
+system("source ~/.bashrc; vcftools --vcf intermediates/10156-586-IDs-corrected.vcf --keep intermediates/test-guys.txt --out intermediates/test --recode")
 ```
 
 
@@ -258,7 +283,7 @@ its sampling location or not (and also whether or not it was a Training or a Tes
 For this to work, the ID's of the individuals all have to start with
 a three-letter location code.
 ```{r}
-thl <- function(nL, Split, train_FST, vcffile = "data/10156-586.recode.vcf") {
+thl <- function(nL, Split, train_FST, vcffile = "intermediates/10156-586-IDs-corrected.vcf") {
   # now, choose the first nL loci, write them to a file, and get all the individuals'
   # genotypes at those loci
   fn <- file.path("intermediates", "tmp_top_loci")
@@ -379,3 +404,208 @@ There are a number of possibilities:
   here into an R-package.
   
 
+## Following up on Benestan's proposed erratum
+
+Laura got back to us with a proposed erratum.  We will check up on some of her numbers here.  
+
+### Population assignment the way they did it
+
+Apparently, Laura accidentally used all the individuals as a training set and then used a random half of
+those individuals as the holdout/test set.  So, let's see if we can reproduce her results by doing that.
+
+Our variable `FST` holds the ranking of the loci by FST when using everyone as the training data.  So, we 
+can just substitute that into our function, using the same individuals as before as the test data (which
+were not properly held out!).  Note that we have to sort the FST results to use them
+```{r bogusTrain}
+# arrange FST from all individuals
+bogus_trainFST <- FST %>%
+  arrange(desc(WEIR_AND_COCKERHAM_FST))
+```
+Check out the top loci in this...Interestingly the loci with the highest Fst's here don't seem to intersect
+with those from `trainFST`...
+```{r}
+bogus_trainFST
+```
+
+Now, go ahead and do the runs
+```{r like_Bene}
+# do them all...
+ResList_bene <- lapply(LocNums, function(x) thl(x, Split, bogus_trainFST))
+
+# then make a big tidy data frame of it:
+ResDF_bene <- bind_rows(ResList_bene)
+
+# compute the proportion correct from each population under each scenario of
+# NumLoci and Train/Test
+SumDF_bene <- ResDF_bene %>%
+  group_by(NumLoci, From, Pool) %>%
+  summarize(NumCorrect = sum(Correct),
+            Ppn_Correct = NumCorrect / n())
+```
+And after that we plot it:
+```{r}
+ggplot(SumDF_bene, aes(x = factor(NumLoci), y = Ppn_Correct, fill = Pool)) +
+  geom_boxplot()
+```
+OK, that is sort of what we might expect it to look like, and it looks a lot like the result that
+Benestan et al. got. 
+
+However, when Laura did it over again recently (in a more correct fashion),
+she reported correct assignment to population of 
+39.4%, which is almost twice what we see here.  So, I suspect that she still has an error in what she
+did.
+
+### Assignment to regional groups using the population assignments
+The erratum that Laura sent me claims that the assignment to regional groups does not suffer from
+a very noticeable high grading bias and the true assignment success to north and south should be 
+correct, about 94.5\% of the time.  
+
+I want to do a quick check on that just using the population-level assignments, and then we will
+toss the individuals into separate "North" and "South" populations, which is how I think that 
+Laura did it.
+
+So, let's get a data frame with the regional groups and then define the regions in ResDF
+```{r}
+Pop_n_reg <- readRDS("data/RegionsAndPops.rds")
+RegionalDF <- left_join(ResDF, Pop_n_reg, by = c("From" = "Pop")) %>%
+  rename(FromRegion = Region) %>%
+  left_join(., Pop_n_reg, by = c("To" = "Pop")) %>%
+  rename(ToRegion = Region) %>%
+  mutate(RegionCorrect = FromRegion == ToRegion)
+
+# and summarize too
+RegionalSummary <- RegionalDF %>%
+  group_by(NumLoci, From, Pool) %>%
+  summarize(NumCorrect = sum(RegionCorrect),
+            Ppn_Correct = NumCorrect / n())
+```
+Then we can plot that:
+```{r}
+ggplot(RegionalSummary, aes(x = factor(NumLoci), y = Ppn_Correct, fill = Pool)) +
+  geom_boxplot()
+```
+So, if you break everything into separate populations and then group them into
+"lobster regions", you are doing pretty well with all the markers, but not as well with
+3000 markers.  Pretty much just what you would expect.
+
+But, then, one might do better by pooling all the regional samples so that the sample
+sizes are large for North and South.
+
+
+
+We have a problem, here, it turns out, in that the Pop identifiers in the paper don't full correspond
+to what we find in the data set on Dryad.  Let's check that out.
+```{r}
+# here are the pops from the dryad file IDs:
+dryad_pops <- unique(ResDF$SampSite)
+
+# here are the pops listed in the paper in the table with
+# the North and South designations
+paper_pops <- Pop_n_reg$Pop
+
+# here are the ones that are common
+popcommon <- intersect(dryad_pops, paper_pops)
+
+# and here are the ones that aren't common to each set
+union(dryad_pops, paper_pops) %>%
+  setdiff(., popcommon)
+```
+
+OK, so here is what we will do.  It is sort of a hack, and won't be totally legit, but will
+use the computation we did previously.  We just toss out any individuals for whom the From or 
+the To columns are not in `popcommon`.  This means tossing about 900 indivs from ResDF:
+```{r}
+
+RegDF <- ResDF %>%
+  filter(To %in% popcommon, From %in% popcommon) %>%
+  left_join(., Pop_n_reg, by = c("From" = "Pop")) %>%
+  rename(FromRegion = Region) %>%
+  left_join(., Pop_n_reg, by = c("To" = "Pop")) %>%
+  rename(ToRegion = Region) %>%
+  left_join(., Pop_n_reg, by = c("From" = "Pop")) %>%
+  mutate(RegionCorrect = FromRegion == ToRegion)
+```
+Then summarize the number/ppn correct according to whether they are from South or North.
+```{r}
+SumDF_region <- RegDF %>%
+  group_by(NumLoci, FromRegion, Pool) %>%
+  summarize(RegionNumCorrect = sum(RegionCorrect),
+            RegionPpn_Correct = RegionNumCorrect / n())
+```
+Then, go ahead an plot those up...
+```{r}
+ggplot(SumDF_region, aes(x = NumLoci, y = RegionPpn_Correct, colour = Pool)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~ FromRegion, ncol = 2)
+```
+This shows us that if we do that population assignment by population and then
+assign the individual to North or South according to which population it is 
+assigned to, then you get about 77% correct assignment of North lobsters and 
+about 94% correct assignment of South lobsters.  So, one could potentially do better when merging all the North and South populations into two big populations.  We shall investigate that now...
+
+### Assignment to regional groups using regional groups as populations
+The way we have hacked this together, it is going to be easiest to change the original VCF file so that
+we can still use all the same functions.  We will just prepend "South" or "North" to the ID of each
+individuals, which will give us "Populations" of "Sou" and "Nor".  Once again, we have to toss out IDs that
+don't correspond to the IDs given in the paper, but that is probably OK for now....
+```{r}
+vcf_lines <- readLines("intermediates/10156-586-IDs-corrected.vcf")
+header_idx <- which(str_detect(vcf_lines, "^#CHROM"))  # line has all the names
+header_elements <- vcf_lines[header_idx] %>%
+  str_split(., "\t") %>%
+  "[["(.,1)
+
+# now we want to prepend a North or a South to each if appropriate:
+ids_df <- data.frame(ID = header_elements[-(1:9)], stringsAsFactors = FALSE) %>%
+  tbl_df %>%
+  mutate(Pop = str_sub(ID, 1, 3)) %>% 
+  left_join(Pop_n_reg) %>%
+  mutate(NewID = paste(Region, ID, sep = "_"))
+
+
+# we get a file of individual names that we want and print it out
+ids_df %>%
+  filter(str_detect(NewID, "North") | str_detect(NewID, "South")) %>%
+  arrange(NewID) %>%
+  select(NewID) %>% 
+  unlist %>%
+  unname %>%
+  cat(., sep = "\n", file = "intermediates/north_south_names.txt") 
+
+# now we make our new header line and write that out into a new VCF file
+new_header_line <- c(header_elements[1:9], ids_df$NewID) %>%
+  paste(., collapse = "\t")
+
+vcf_lines[header_idx] <- new_header_line
+
+cat(vcf_lines, file = "intermediates/north_south_renamed.vcf", sep = "\n")
+
+# and now we keep only the ones that we know are in North or South...
+system("source ~/.bashrc; vcftools --vcf intermediates/north_south_renamed.vcf --keep intermediates/north_south_names.txt --out intermediates/final_north_south --recode")
+```
+
+OK, with that done, let's just run gsi_sim using all the markers as a first pass / check.
+```{r}
+vcf2gsi_sim("intermediates/final_north_south.recode.vcf", outf = "intermediates/north_south_baseline.txt")
+
+system("source ~/.bashrc; /Users/eriq/Documents/git-repos/gsi_sim/gsisim -b intermediates/north_south_baseline.txt --self-assign > intermediates/north_south_all_out.txt")
+
+allLoci <- slurp_ass("intermediates/north_south_all_out.txt")
+```
+
+Now we can see how those came out:
+```{r}
+allLoci %>%
+  group_by(From, To) %>%
+  tally()
+```
+Which tells us that lobsters from the North get assigned correctly about 90% of the time, and lobsters from
+the South get assigned correctly about 95% of the time, using all of the loci.  
+
+So, this gives us a maximum power that we should expect.  It is unwise to think that you can
+do any better (on average) with a smaller, selected subset of loci.  So, I think this is sufficient
+to say that the Benestan et al markers can assign lobsters to North or South pretty well.  I don't find 94.5% correct assignment of both North and South lobsters, as Benestan et al. claim, but it's not far off.
+
+
+when both north 
