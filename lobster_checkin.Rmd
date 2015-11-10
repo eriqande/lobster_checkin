@@ -2,30 +2,39 @@
 title: "Trying to Reproduce Benestan et al. Assignment Results"
 author: "Eric C. Anderson and Kelly Barr"
 date: "Started: October 8, 2015"
-output: html_document
+output: 
+  html_document:
+    toc: true
 ---
 
 
-Here check some results that Louis Bernatchez's group had
+Here we check some results that Louis Bernatchez's group had
 on Lobster population genetics in this paper: 
 [RAD genotyping reveals fine-scale genetic structuring and provides powerful population assignment in a widely distributed marine species, the American lobster (Homarus americanus)](http://onlinelibrary.wiley.com/doi/10.1111/mec.13245/abstract).
 
-We found it strange that Benestan et al found that their power for assignment _decreased_ dramatically as they added
+We found it strange that Benestan et al. found that their power for assignment decreased _dramatically_ as they added
 more markers past 3000.  This seems worrisome to us because it is a pattern characteristic of
 high grading bias.  Here we use Eric's program `gsi_sim` to implement the Training-Holdout-Leave-one-out
 (THL) procedure from 
 [Anderson 2010](http://onlinelibrary.wiley.com/doi/10.1111/j.1755-0998.2010.02846.x/full) 
 to assess power for assignment of lobsters to their sampling
-locations of origin.  And we don't find as much power for that as Benestan and
-colleagues reported.  We conclude they suffered some high-grading bias in the procedure they used, even
+locations of origin.  We do not find as much power for assignment to sampling locations as Benestan and
+colleagues report.  We conclude they suffered some high-grading bias in the procedure they used, even
 though they intended to eliminate any such bias.
+
+Following correspondence with Benestan, in which she confirmed that they had inadvertently included the training
+individuals in their test set for assignment to sampling locations, we conducted analyses to assess how well
+individuals could be assigned between North and South regions, effectively confirming that it is possible to 
+assign individuals between North and South with accuracy in the low 90s of percent.  Interestingly, the power
+of assignment continued to increase as markers were added up to the total number of markers, suggesting that
+assigning individuals relies on small allele frequency differnces at many markers.
+
 
 Note that if you want to reproduce these results you will want to be on a Mac or a Unix system.
 You will need to have `vcftools` installed and in your `$PATH` variable which is given in a
 `~/.bashrc` file.  Likewise you will need `gsi_sim`
 ([https://github.com/eriqande/gsi_sim](https://github.com/eriqande/gsi_sim) commit 280734b4 or later)
-compiled and on your `$PATH`.  (actually at this point you will need to change the absolute path
-`/Users/eriq/Documents/git-repos/gsi_sim/gsisim` to whatever it would be on your system.)
+compiled and on your `$PATH`.  
 
 To reproduce this work, clone this repo, install `gsi_sim` and `vcftools` and put them on your 
 `$PATH` as listed in your `~/.bashrc`, then you have to download the file `10156-586.recode.vcf` from the
@@ -47,7 +56,7 @@ library(stringr)
 
 First thing we need to do is correct some errors in the data set.  There are sampling locations codes in the
 data set on Dryad that do not appear in the paper, and there are location codes in the paper that do not
-appear in the data set!  A coauthor of the paper indicated that this could all be fixed by:
+appear in the data set.  Thierry, a coauthor of the paper, indicated that this could all be fixed by:
 
 - Sampling sites EDN and CAP get renamed to MAG
 - Sampling site SID gets renamed to DIN.
@@ -67,7 +76,7 @@ header_elements <- vcf_lines[header_idx] %>%
 # now, rename the individuals as appropriate
 ids <- header_elements[-(1:9)] %>%
   str_replace_all("EDN_", "MAG_a") %>%  # Note we append the a and b on the ID to keep them unique
-  str_replace_all("CAP_", "MAG_b") %>%
+  str_replace_all("CAP_", "MAG_b") %>%  # for individuals, but the same 3-letter location code
   str_replace_all("SID_", "DIN_")
 
 # and put that new header back into there and print it out
@@ -89,8 +98,8 @@ Inds
 We don't need the mean read depths.  That was just a convenient way to list all the individuals in
 the file.
 
-Now, we are actually going to need some text files that list which individuals are in different
-populations.  We can do that like so:
+Now, we are actually going to need some text files that list which individuals are from different
+sampling locations.  We can do that like so:
 ```{r}
 for(SS in unique(Inds$SampSite)) {
   Inds %>% 
@@ -131,7 +140,8 @@ Here is what they look like:
 FST
 ```
 
-So, let's plot that and note that there are most definitely some loci that are big outliers.
+So, let's plot that and note that there are some loci that appear to be outliers (but that
+could be the consequence of sampling variation, as well...)
 ```{r fstplot, fig.width=10, fig.height=7}
 ggplot(FST, aes(x = WEIR_AND_COCKERHAM_FST)) + geom_histogram(binwidth = 0.001)
 ```
@@ -276,7 +286,7 @@ We are now almost there, but it will be convenient to have a function to which y
 
 1. The number of loci to select
 1. A data frame `Split` that tells us who is Training and who is Test
-1. A data frame like train_FST
+1. A data frame like `train_FST`
 1. A VCF file with all the individuals and all the SNPs
 
 And it will return to you a data frame telling you whether each individual was correctly assigned to
@@ -310,7 +320,7 @@ thl <- function(nL, Split, train_FST, vcffile = "intermediates/10156-586-IDs-cor
               outf = paste(fn, "gsi_sim_input", sep = "."))
   
   # then run gsi_sim on it
-  system(paste("source ~/.bashrc; /Users/eriq/Documents/git-repos/gsi_sim/gsisim -b", paste(fn, "gsi_sim_input", sep = "."),
+  system(paste("source ~/.bashrc; gsi_sim -b", paste(fn, "gsi_sim_input", sep = "."),
                "--self-assign > intermediates/bigdump"))
   
   
@@ -378,7 +388,8 @@ summarizes the results over all the
 different sampling locations.
 
 The different colors denote what happens when you use different sets of individuals as the
-"Test" set, i.e. either the Holdout individuals (correct) or the Training individuals
+"Test" set, i.e. either the Holdout individuals (correct, labeled "Test" in the figure) or
+the Training individuals
 (incorrect and subject to high grading bias) or Both the Training and the Holdout individuals
 (also incorrect and subject to high grading bias).
 
@@ -391,23 +402,13 @@ ggplot(NewSumDF, aes(x = factor(NumLoci), y = Ppn_Correct, fill = Pool)) +
 So, when we assess these markers using THL with selection based on global Fst as computed by
 `vcftools` we find that there isn't that much power for identifying different sampling locations, and
 the pattern observed by Benestan et al. looks a lot like what we see with high-grading bias.
-There are a number of possibilities:
+We suspect there was an error in Benestan et al.'s analysis.
 
-1. Benestan et al. are doing locus selection in a different manner that is better than using global
-  Fst, or they have found a better way of assessing power than THL that is still robust against
-  high grading bias.  This would be very interesting and fun to follow up on.
-1. We have made a mistake in our calculations.  (Always possible, which is why Eric tries to package this
-  sort of stuff up in a reproducible package that shows explicitly what we have done, so any errors
-  can be found!)
-1. Benestan et al. have an error in their power assessment procedure that gives overly optimistic
-  results.  If so, this would suggest that easy tools for accurately assessing assignment power correctly 
-  (especially from large RAD data sets) are needed.  Perhaps we could generalize the R code used
-  here into an R-package.
-  
+We sent them this analysis and Laura followed up, confirming that there was a problem with her analysis.
 
 ## Following up on Benestan's proposed erratum
 
-Laura got back to us with a proposed erratum.  We will check up on some of her numbers here.  
+Laura got back to us with a proposed erratum.  We now check up on some of her numbers here.  
 
 ### Population assignment the way they did it
 
@@ -423,7 +424,9 @@ bogus_trainFST <- FST %>%
   arrange(desc(WEIR_AND_COCKERHAM_FST))
 ```
 Check out the top loci in this...Interestingly the loci with the highest Fst's here don't seem to intersect
-with those from `trainFST`...
+with those from `trainFST`. I suppose that this suggests that the much of the variation across loci 
+(at least in the upper tail of the distribution) in FST
+is driven by sampling variation, rather than location-specific differences.
 ```{r}
 bogus_trainFST
 ```
@@ -444,11 +447,12 @@ SumDF_bene <- ResDF_bene %>%
             Ppn_Correct = NumCorrect / n())
 ```
 And after that we plot it:
-```{r}
+```{r, fig.width=10, fig.height=7}
 ggplot(SumDF_bene, aes(x = factor(NumLoci), y = Ppn_Correct, fill = Pool)) +
   geom_boxplot()
 ```
-OK, that is sort of what we might expect it to look like, and it looks a lot like the result that
+
+OK, that is what we might expect it to look like, and it looks a lot like the result that
 Benestan et al. got. 
 
 However, when Laura did it over again recently (in a more correct fashion),
@@ -461,11 +465,15 @@ The erratum that Laura sent me claims that the assignment to regional groups doe
 a very noticeable high grading bias and the true assignment success to north and south should be 
 correct, about 94.5\% of the time.  
 
-I want to do a quick check on that just using the population-level assignments, and then we will
-toss the individuals into separate "North" and "South" populations, which is how I think that 
-Laura did it.
+I want to do a quick check on that just using the sampling-location-level assignments, from which
+we will toss the individuals into separate "North" and "South" populations.  I don't think that 
+this is how Laura did it, but it is a common approach to dealing with "Reporting Units" in the salmon
+world, and we can do it using the results we have already computed.
 
-So, let's get a data frame with the regional groups and then define the regions in ResDF
+So, let's get a data frame with the regional groups and then define the regions in ResDF.  We made a data
+frame of the North/South membership of different locations (from the paper) and saved it into
+`data/RegionsAndPops.rds`.
+
 ```{r}
 Pop_n_reg <- readRDS("data/RegionsAndPops.rds")
 RegionalDF <- left_join(ResDF, Pop_n_reg, by = c("From" = "Pop")) %>%
@@ -481,7 +489,7 @@ RegionalSummary <- RegionalDF %>%
             Ppn_Correct = NumCorrect / n())
 ```
 Then we can plot that:
-```{r}
+```{r, fig.width=10, fig.height=7}
 ggplot(RegionalSummary, aes(x = factor(NumLoci), y = Ppn_Correct, fill = Pool)) +
   geom_boxplot()
 ```
@@ -489,8 +497,15 @@ So, if you break everything into separate populations and then group them into
 "lobster regions", you are doing pretty well with all the markers, but not as well with
 3000 markers.  Pretty much just what you would expect.
 
-But, then, one might do better by pooling all the regional samples so that the sample
-sizes are large for North and South.
+Interestingly, this shows that even with the fairly small samples at each 
+sampling location, there is enough information about allele frequencies to make that
+information useful to assign individuals to the correct region at a rate of about 
+90%, even if you can't assign them to the correct sampling location.  
+
+However, one might suspect taht you could do better by pooling all the regional samples so that the sample
+sizes are large for North and South. In effect considering that the lobsters come from just 
+two populations: North or South.  We will explore this, as it appears to be what
+Benestan et al. did.
 
 
 
@@ -512,16 +527,6 @@ ids_df <- data.frame(ID = header_elements[-(1:9)], stringsAsFactors = FALSE) %>%
   mutate(Pop = str_sub(ID, 1, 3)) %>% 
   left_join(Pop_n_reg) %>%
   mutate(NewID = paste(Region, ID, sep = "_"))
-
-
-# we get a file of individual names that we want and print it out
-ids_df %>%
-  filter(str_detect(NewID, "North") | str_detect(NewID, "South")) %>%
-  arrange(NewID) %>%
-  select(NewID) %>% 
-  unlist %>%
-  unname %>%
-  cat(., sep = "\n", file = "intermediates/north_south_names.txt") 
 
 # now we make our new header line and write that out into a new VCF file
 new_header_line <- c(header_elements[1:9], ids_df$NewID) %>%
@@ -603,7 +608,7 @@ system(CALL)
 ```
 
 Let's have a look at the Fst between regions computed from the training data:
-```{r}
+```{r, fig.width=10, fig.height=7}
 trainFST_reg <- read.table("intermediates/train-recode-reg.weir.fst", 
                            stringsAsFactors = FALSE, 
                            header = TRUE) %>%
@@ -613,13 +618,9 @@ ggplot(trainFST_reg, aes(x = WEIR_AND_COCKERHAM_FST)) +
   geom_histogram(binwidth = 0.001)
 ```
 
-Hmm...the Fst between these two groups that got computed there seems lower than what is reported in the paper.
 
 At any rate, we are now ready to run this.  
 ```{r, cache=TRUE}
-# number of SNPs
-LocNums <- c(500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 10156)
-
 # do them all...
 ResListReg <- lapply(LocNums, function(x) thl(nL = x, 
                                               Split = SplitReg, 
@@ -637,7 +638,7 @@ SumDF_reg <- ResDF_reg %>%
 ```
 
 So, now we can plot those as lines, faceted on North and South:
-```{r}
+```{r, fig.width=10, fig.height=7}
 ggplot(SumDF_reg, aes(x = NumLoci, y = Ppn_Correct, colour = Pool)) +
   geom_line() +
   geom_point() +
@@ -646,8 +647,181 @@ ggplot(SumDF_reg, aes(x = NumLoci, y = Ppn_Correct, colour = Pool)) +
 
 The "Train" lines show the results when the training set is used as the test set (and thus would be subject to high grading bias).  This indicates that with the larger sample sizes there is not a strong high grading bias effect (as stated in Anderson 2010, the effect will be larger with small samples.)  And, it shows that using all the loci one can apparently allocate individuals to region with with accuracy > 90%.  
 
+It is also important to note that the assignment probability increases with each marker.  There are two 
+important conclusions we can draw from this:
+
+- It is not the case that you can do better (or even just as well) with a subset of markers in this case---you
+  can use every additional marker.
+- The power for assignment here might be an overestimate because the VCF file provided on Dryad does not seem
+  to indicate which markers occur within the same RAD locus.  Thus, many of the SNPs might be within 100 bp of
+  one another, and hence in high LD.  `gsi_sim` assumes that markers are not in LD in the separate 
+  populations, so, if they are, then it will
+  overestimate the power for assignment.
+
+
 
 ## A quick sanity check
 
-Here is a quick sanity check that could be done.: permute the individuals in the data set and randomly allocate them
-to two different groups: Fake1 and Fake2, say, of the same size as the North and South and then see how well we can allocate them.  I expect, not at all
+Here is a quick sanity check that could be done: permute the individuals in the data setand randomly allocate them
+to two different groups: Fake1 and Fake2, say, of the same size as the North and South and then
+see how well we can allocate them.  I expect, not at all, but it is worth making sure that we don't have
+some weird artifactual thing going on.  I should really roll the whole process above into a function, but 
+I don't want to hassle with that with all the text files that are getting written, etc.  I 
+am just going to lazily copy and paste everything from above and tweak:
+
+```{r}
+vcf_lines <- readLines("intermediates/10156-586-IDs-corrected.vcf")
+header_idx <- which(str_detect(vcf_lines, "^#CHROM"))  # line has all the names
+header_elements <- vcf_lines[header_idx] %>%
+  str_split(., "\t") %>%
+  "[["(.,1)
+
+# now we want to prepend a FK1 or a FK2 (Fake-1 or Fake-2) to each if appropriate.
+ids_df <- data.frame(ID = header_elements[-(1:9)], stringsAsFactors = FALSE) %>%
+  tbl_df %>%
+  mutate(Pop = str_sub(ID, 1, 3)) %>% 
+  left_join(Pop_n_reg) 
+# First, figure out how many North and South individuals there are:
+nums <- ids_df %>%
+  group_by(Region) %>%
+  tally() %>%
+  select(n) %>%
+  unlist
+# then make a series of those prefixes
+name_prepend <- sample(c(rep("FK1", nums[1]), rep("FK2", nums[2])))
+
+
+
+# we get a file of individual names that we want and print it out
+ids_df <- ids_df %>%
+  mutate(NewID = paste(name_prepend, ID, sep = "_")) 
+
+ids_df %>%
+  filter(str_detect(NewID, "FK1") | str_detect(NewID, "FK2")) %>%
+  arrange(NewID) %>%
+  select(NewID) %>% 
+  unlist %>%
+  unname %>%
+  cat(., sep = "\n", file = "intermediates/north_south_names.txt") 
+
+# now we make our new header line and write that out into a new VCF file
+new_header_line <- c(header_elements[1:9], ids_df$NewID) %>%
+  paste(., collapse = "\t")
+
+vcf_lines[header_idx] <- new_header_line
+
+cat(vcf_lines, file = "intermediates/north_south_renamed.vcf", sep = "\n")
+```
+
+OK, now `intermediates/north_south_renamed.vcf` is a file that we can just pump through the steps we
+took above for assessing high-grading bias. Let's make a variable like Inds:
+```{r}
+system("source ~/.bashrc; vcftools --vcf intermediates/north_south_renamed.vcf --out intermediates/get-indivs-reg --depth")
+
+IndsReg <- read.table("intermediates/get-indivs-reg.idepth", stringsAsFactors = FALSE, header = TRUE) %>%
+  tbl_df %>%
+  mutate(SampSite = str_sub(INDV, 1, 3))
+```
+Now `SampSite` takes values of `Nor` or `Sou`.
+
+### Split these fake groups into regional training and test sets
+Same drill as before:
+```{r}
+set.seed(111) # for reproducibility
+# permute them within sample location and then let every other one be a Training individual 
+SplitReg <- IndsReg %>%
+  group_by(SampSite) %>%
+  mutate(Pool = ifelse(sample(1:length(INDV)) %% 2 == 0, "Test", "Train")) %>%
+  ungroup
+```
+
+Now, make two vcf files with those different pools in them:
+```{r}
+# first we make files with the names of the individuals
+SplitReg %>% 
+  filter(Pool == "Test") %>% 
+  select(INDV) %>% 
+  unlist %>% 
+  unname  %>%
+  cat(., file = "intermediates/test-guys-reg.txt", sep = "\n")
+
+SplitReg %>% 
+  filter(Pool == "Train") %>% 
+  select(INDV) %>% 
+  unlist %>% 
+  unname  %>%
+  cat(., file = "intermediates/train-guys-reg.txt", sep = "\n")
+
+# then we run vcftools to grab those out:
+system("source ~/.bashrc; vcftools --vcf intermediates/north_south_renamed.vcf --keep intermediates/train-guys-reg.txt --out intermediates/train-reg --recode")
+system("source ~/.bashrc; vcftools --vcf intermediates/north_south_renamed.vcf --keep intermediates/test-guys-reg.txt --out intermediates/test-reg --recode")
+
+```
+
+Then compute Fst from the training data:
+```{r}
+# first make a file that names the north and south individuals 
+IndsReg %>%
+  filter(str_detect(INDV, "FK1")) %>% 
+  select(INDV) %>%
+  unlist %>%
+  unname %>%
+  cat(., file = "intermediates/North", sep = "\n")
+
+IndsReg %>%
+  filter(str_detect(INDV, "FK2")) %>% 
+  select(INDV) %>%
+  unlist %>%
+  unname %>%
+  cat(., file = "intermediates/South", sep = "\n")
+
+
+# then put together the commands to compute the Fst's using the training individuals
+fst_comms <- paste("--weir-fst-pop", file.path("intermediates", c("North", "South")), collapse = " ")
+CALL <- paste("source ~/.bashrc; vcftools --vcf intermediates/train-reg.recode.vcf --out intermediates/train-recode-reg", fst_comms)
+system(CALL)
+
+```
+
+Let's have a look at the Fst between regions computed from the training data:
+```{r}
+trainFST_reg <- read.table("intermediates/train-recode-reg.weir.fst", 
+                           stringsAsFactors = FALSE, 
+                           header = TRUE) %>%
+  tbl_df
+
+ggplot(trainFST_reg, aes(x = WEIR_AND_COCKERHAM_FST)) +
+  geom_histogram(binwidth = 0.001)
+```
+
+Hmm...the Fst between these two groups that got computed there seems lower than what is reported in the paper.
+
+At any rate, we are now ready to run this.  
+```{r, cache=TRUE}
+# number of SNPs
+LocNums <- c(25, 50, 100, 250, 500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 10156)
+
+# do them all...
+ResListReg <- lapply(LocNums, function(x) thl(nL = x, 
+                                              Split = SplitReg, 
+                                              train_FST = trainFST_reg, 
+                                              vcffile = "intermediates/north_south_renamed.vcf"))
+
+ResDF_reg <- bind_rows(ResListReg)
+
+# compute the proportion correct from each population under each scenario of
+# NumLoci and Train/Test
+SumDF_reg <- ResDF_reg %>%
+  group_by(NumLoci, From, Pool) %>%
+  summarize(NumCorrect = sum(Correct),
+            Ppn_Correct = NumCorrect / n())
+```
+
+So, now we can plot those as lines, faceted on FK1 and FK2:
+```{r}
+ggplot(SumDF_reg, aes(x = NumLoci, y = Ppn_Correct, colour = Pool)) +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~ From, nrow = 1)
+```
+
