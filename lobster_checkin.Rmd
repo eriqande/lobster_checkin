@@ -140,8 +140,8 @@ Here is what they look like:
 FST
 ```
 
-So, let's plot that and note that there are some loci that appear to be outliers (but that
-could be the consequence of sampling variation, as well...)
+So, let's plot that and note that there are some loci that appear to be outliers, but that
+is likely the consequence of sampling variation.  
 ```{r fstplot, fig.width=10, fig.height=7}
 ggplot(FST, aes(x = WEIR_AND_COCKERHAM_FST)) + geom_histogram(binwidth = 0.001)
 ```
@@ -656,172 +656,10 @@ important conclusions we can draw from this:
   to indicate which markers occur within the same RAD locus.  Thus, many of the SNPs might be within 100 bp of
   one another, and hence in high LD.  `gsi_sim` assumes that markers are not in LD in the separate 
   populations, so, if they are, then it will
-  overestimate the power for assignment.
+  overestimate the power for assignment, because the actual number of independent SNPs is less than 
+  10156.
 
 
 
-## A quick sanity check
 
-Here is a quick sanity check that could be done: permute the individuals in the data setand randomly allocate them
-to two different groups: Fake1 and Fake2, say, of the same size as the North and South and then
-see how well we can allocate them.  I expect, not at all, but it is worth making sure that we don't have
-some weird artifactual thing going on.  I should really roll the whole process above into a function, but 
-I don't want to hassle with that with all the text files that are getting written, etc.  I 
-am just going to lazily copy and paste everything from above and tweak:
-
-```{r}
-vcf_lines <- readLines("intermediates/10156-586-IDs-corrected.vcf")
-header_idx <- which(str_detect(vcf_lines, "^#CHROM"))  # line has all the names
-header_elements <- vcf_lines[header_idx] %>%
-  str_split(., "\t") %>%
-  "[["(.,1)
-
-# now we want to prepend a FK1 or a FK2 (Fake-1 or Fake-2) to each if appropriate.
-ids_df <- data.frame(ID = header_elements[-(1:9)], stringsAsFactors = FALSE) %>%
-  tbl_df %>%
-  mutate(Pop = str_sub(ID, 1, 3)) %>% 
-  left_join(Pop_n_reg) 
-# First, figure out how many North and South individuals there are:
-nums <- ids_df %>%
-  group_by(Region) %>%
-  tally() %>%
-  select(n) %>%
-  unlist
-# then make a series of those prefixes
-name_prepend <- sample(c(rep("FK1", nums[1]), rep("FK2", nums[2])))
-
-
-
-# we get a file of individual names that we want and print it out
-ids_df <- ids_df %>%
-  mutate(NewID = paste(name_prepend, ID, sep = "_")) 
-
-ids_df %>%
-  filter(str_detect(NewID, "FK1") | str_detect(NewID, "FK2")) %>%
-  arrange(NewID) %>%
-  select(NewID) %>% 
-  unlist %>%
-  unname %>%
-  cat(., sep = "\n", file = "intermediates/north_south_names.txt") 
-
-# now we make our new header line and write that out into a new VCF file
-new_header_line <- c(header_elements[1:9], ids_df$NewID) %>%
-  paste(., collapse = "\t")
-
-vcf_lines[header_idx] <- new_header_line
-
-cat(vcf_lines, file = "intermediates/north_south_renamed.vcf", sep = "\n")
-```
-
-OK, now `intermediates/north_south_renamed.vcf` is a file that we can just pump through the steps we
-took above for assessing high-grading bias. Let's make a variable like Inds:
-```{r}
-system("source ~/.bashrc; vcftools --vcf intermediates/north_south_renamed.vcf --out intermediates/get-indivs-reg --depth")
-
-IndsReg <- read.table("intermediates/get-indivs-reg.idepth", stringsAsFactors = FALSE, header = TRUE) %>%
-  tbl_df %>%
-  mutate(SampSite = str_sub(INDV, 1, 3))
-```
-Now `SampSite` takes values of `Nor` or `Sou`.
-
-### Split these fake groups into regional training and test sets
-Same drill as before:
-```{r}
-set.seed(111) # for reproducibility
-# permute them within sample location and then let every other one be a Training individual 
-SplitReg <- IndsReg %>%
-  group_by(SampSite) %>%
-  mutate(Pool = ifelse(sample(1:length(INDV)) %% 2 == 0, "Test", "Train")) %>%
-  ungroup
-```
-
-Now, make two vcf files with those different pools in them:
-```{r}
-# first we make files with the names of the individuals
-SplitReg %>% 
-  filter(Pool == "Test") %>% 
-  select(INDV) %>% 
-  unlist %>% 
-  unname  %>%
-  cat(., file = "intermediates/test-guys-reg.txt", sep = "\n")
-
-SplitReg %>% 
-  filter(Pool == "Train") %>% 
-  select(INDV) %>% 
-  unlist %>% 
-  unname  %>%
-  cat(., file = "intermediates/train-guys-reg.txt", sep = "\n")
-
-# then we run vcftools to grab those out:
-system("source ~/.bashrc; vcftools --vcf intermediates/north_south_renamed.vcf --keep intermediates/train-guys-reg.txt --out intermediates/train-reg --recode")
-system("source ~/.bashrc; vcftools --vcf intermediates/north_south_renamed.vcf --keep intermediates/test-guys-reg.txt --out intermediates/test-reg --recode")
-
-```
-
-Then compute Fst from the training data:
-```{r}
-# first make a file that names the north and south individuals 
-IndsReg %>%
-  filter(str_detect(INDV, "FK1")) %>% 
-  select(INDV) %>%
-  unlist %>%
-  unname %>%
-  cat(., file = "intermediates/North", sep = "\n")
-
-IndsReg %>%
-  filter(str_detect(INDV, "FK2")) %>% 
-  select(INDV) %>%
-  unlist %>%
-  unname %>%
-  cat(., file = "intermediates/South", sep = "\n")
-
-
-# then put together the commands to compute the Fst's using the training individuals
-fst_comms <- paste("--weir-fst-pop", file.path("intermediates", c("North", "South")), collapse = " ")
-CALL <- paste("source ~/.bashrc; vcftools --vcf intermediates/train-reg.recode.vcf --out intermediates/train-recode-reg", fst_comms)
-system(CALL)
-
-```
-
-Let's have a look at the Fst between regions computed from the training data:
-```{r}
-trainFST_reg <- read.table("intermediates/train-recode-reg.weir.fst", 
-                           stringsAsFactors = FALSE, 
-                           header = TRUE) %>%
-  tbl_df
-
-ggplot(trainFST_reg, aes(x = WEIR_AND_COCKERHAM_FST)) +
-  geom_histogram(binwidth = 0.001)
-```
-
-Hmm...the Fst between these two groups that got computed there seems lower than what is reported in the paper.
-
-At any rate, we are now ready to run this.  
-```{r, cache=TRUE}
-# number of SNPs
-LocNums <- c(25, 50, 100, 250, 500, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 10156)
-
-# do them all...
-ResListReg <- lapply(LocNums, function(x) thl(nL = x, 
-                                              Split = SplitReg, 
-                                              train_FST = trainFST_reg, 
-                                              vcffile = "intermediates/north_south_renamed.vcf"))
-
-ResDF_reg <- bind_rows(ResListReg)
-
-# compute the proportion correct from each population under each scenario of
-# NumLoci and Train/Test
-SumDF_reg <- ResDF_reg %>%
-  group_by(NumLoci, From, Pool) %>%
-  summarize(NumCorrect = sum(Correct),
-            Ppn_Correct = NumCorrect / n())
-```
-
-So, now we can plot those as lines, faceted on FK1 and FK2:
-```{r}
-ggplot(SumDF_reg, aes(x = NumLoci, y = Ppn_Correct, colour = Pool)) +
-  geom_line() +
-  geom_point() +
-  facet_wrap(~ From, nrow = 1)
-```
 
