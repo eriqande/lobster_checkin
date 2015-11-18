@@ -650,16 +650,25 @@ The "Train" lines show the results when the training set is used as the test set
 It is also important to note that the assignment probability increases with each marker.  There are two 
 important conclusions we can draw from this:
 
+- I have no idea how Benestan et al. get roughly 95% correct assignment with only 3000 markers.  In my analyses, it
+  looks like one has about 85% correct assignment with 3000 markers.
 - It is not the case that you can do better (or even just as well) with a subset of markers in this case---you
   can use every additional marker.
 - The power for assignment here might be an overestimate because the VCF file provided on Dryad does not seem
   to indicate which markers occur within the same RAD locus.  Thus, many of the SNPs might be within 100 bp of
   one another, and hence in high LD.  `gsi_sim` assumes that markers are not in LD in the separate 
   populations, so, if they are, then it will
-  overestimate the power for assignment, because the actual number of independent SNPs is less than 
-  10156.
+  overestimate the power for assignment, because the actual number of independent SNPs is less than 10156.  
+  It might be that the expected accuracy in the THL procedure is actually relatively unaffected by
+  the occurrence of LD between markers, but the variance will likely be increased, and the posterior probabilities
+  of assignment will be much skewed. At any rate, it is something to think about. 
 
 
+## Session Info
+Here is how my system is configured:
+```{r}
+sessionInfo()
+```
 
 
 
